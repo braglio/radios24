@@ -1,9 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useAudio } from "@/components/audio/useAudio";
 import type { Station } from "@/types/station";
 
 export default function PlayerClient({ radio }: { radio: Station }) {
+  const {
+    currentStation,
+    status,
+    volume,
+    error,
+    playStation,
+    pause,
+    resume,
+    setVolume,
+  } = useAudio();
 
   const sendAnalyticsEvent = async (type: "open" | "play") => {
     try {
@@ -20,28 +31,10 @@ export default function PlayerClient({ radio }: { radio: Station }) {
     } catch {}
   };
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  const [playing, setPlaying] = useState(false);
-  const [status, setStatus] = useState("Listo para reproducir");
   const [metadata, setMetadata] = useState("Cargando metadata...");
-  const [volume, setVolume] = useState(0.85);
 
   useEffect(() => {
     sendAnalyticsEvent("open");
-    const channel = new BroadcastChannel("radios24-player");
-
-    channel.onmessage = (event) => {
-      if (event.data?.type === "PLAYING" && event.data.slug !== radio.slug) {
-        if (audioRef.current) {
-          audioRef.current.pause();
-          setPlaying(false);
-          setStatus("Pausado por otra emisora");
-        }
-      }
-    };
-
-    return () => channel.close();
   }, [radio.slug]);
 
   useEffect(() => {
@@ -70,47 +63,41 @@ export default function PlayerClient({ radio }: { radio: Station }) {
     return () => clearInterval(timer);
   }, [radio.streamUrl]);
 
-  const startPlayback = async () => {
-    if (!audioRef.current) return;
+  const isCurrentStation = currentStation?.slug === radio.slug;
+  const isPlaying = isCurrentStation && status === "playing";
+  const isLoading = isCurrentStation && status === "loading";
+  const hasError = isCurrentStation && status === "error";
 
-    audioRef.current.src = radio.streamUrl;
-    audioRef.current.volume = volume;
-
-    setStatus("Conectando...");
-
-    try {
-      await audioRef.current.play();
-
-      const channel = new BroadcastChannel("radios24-player");
-      channel.postMessage({ type: "PLAYING", slug: radio.slug });
-      channel.close();
-
-      await sendAnalyticsEvent("play");
-      setPlaying(true);
-      setStatus("Transmitiendo en vivo");
-    } catch {
-      setPlaying(false);
-      setStatus("No se pudo conectar al stream");
-    }
-  };
+  const playbackLabel = !isCurrentStation
+    ? "Listo para reproducir"
+    : status === "playing"
+      ? "Transmitiendo en vivo"
+      : status === "paused"
+        ? "Pausado"
+        : status === "loading"
+          ? "Conectando..."
+          : status === "error"
+            ? error?.message || "No se pudo conectar al stream"
+            : "Listo para reproducir";
 
   const toggle = async () => {
-    if (!audioRef.current) return;
-
-    if (playing) {
-      audioRef.current.pause();
-      setPlaying(false);
-      setStatus("Pausado");
+    if (isPlaying) {
+      pause();
       return;
     }
 
-    await startPlayback();
+    if (isCurrentStation && status === "paused") {
+      await resume();
+      void sendAnalyticsEvent("play");
+      return;
+    }
+
+    await playStation(radio);
+    void sendAnalyticsEvent("play");
   };
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-black text-white">
-      <audio ref={audioRef} preload="none" />
-
       <div className="absolute inset-0 opacity-25 blur-3xl">
         <div className={`h-full w-full bg-gradient-to-br ${radio.color}`} />
       </div>
@@ -153,9 +140,9 @@ export default function PlayerClient({ radio }: { radio: Station }) {
           </p>
 
           <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-            <p className={playing ? "text-emerald-400" : "text-zinc-400"}>
-              {playing ? "● " : "○ "}
-              {status}
+            <p className={isPlaying ? "text-emerald-400" : "text-zinc-400"}>
+              {isPlaying ? "● " : "○ "}
+              {playbackLabel}
             </p>
 
             <div className="mt-3 border-t border-white/10 pt-3">
@@ -174,20 +161,26 @@ export default function PlayerClient({ radio }: { radio: Station }) {
               min="0"
               max="100"
               value={Math.round(volume * 100)}
-              onChange={(event) => {
-                const nextVolume = Number(event.target.value) / 100;
-                setVolume(nextVolume);
-                if (audioRef.current) audioRef.current.volume = nextVolume;
-              }}
+              onChange={(event) =>
+                setVolume(Number(event.target.value) / 100)
+              }
+              aria-label={`Volumen: ${Math.round(volume * 100)}%`}
               className="w-full"
             />
           </div>
 
           <button
             onClick={toggle}
+            disabled={isLoading}
             className="mt-auto flex h-16 w-full items-center justify-center rounded-2xl bg-white text-2xl font-black text-black transition hover:scale-[1.02]"
           >
-            {playing ? "▌▌ PAUSAR" : "▶ PLAY"}
+            {isLoading
+              ? "… CONECTANDO"
+              : isPlaying
+                ? "▌▌ PAUSAR"
+                : hasError
+                  ? "↻ REINTENTAR"
+                  : "▶ PLAY"}
           </button>
 
             <div className="mt-4 text-center text-[10px] uppercase tracking-[0.35em] text-zinc-600">

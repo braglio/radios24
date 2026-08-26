@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { AudioError, AudioState, Station } from "@/types/station";
+import PlayerBar from "@/components/PlayerBar";
 import { AudioContext, type AudioContextValue } from "./useAudio";
 
 const initialState: AudioState = {
@@ -138,6 +139,7 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
   return (
     <AudioContext.Provider value={value}>
       {children}
+      <PlayerBar />
       <audio
         ref={audioRef}
         preload="none"

@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { PlaybackStatus, Station } from "@/types/station";
+import { useEffect, useMemo, useState } from "react";
+import { useAudio } from "@/components/audio/useAudio";
+import type { Station } from "@/types/station";
 
 const normalize = (value: string) =>
   value
@@ -17,12 +18,9 @@ export default function RadioPortalClient({
   radios: Station[];
   featuredSlugs: string[];
 }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const { currentStation, status, playStation, pause, resume } = useAudio();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Todas");
-  const [activeRadio, setActiveRadio] = useState<Station | null>(null);
-  const [playerState, setPlayerState] = useState<PlaybackStatus>("idle");
-  const [volume, setVolume] = useState(0.85);
   const [metadata, setMetadata] = useState("Transmitiendo en vivo");
 
   const categories = useMemo(() => {
@@ -56,14 +54,14 @@ export default function RadioPortalClient({
   );
 
   useEffect(() => {
-    if (!activeRadio) return;
+    if (!currentStation) return;
 
     let cancelled = false;
 
     async function loadMetadata() {
       try {
         const response = await fetch(
-          `/api/metadata?slug=${encodeURIComponent(activeRadio!.slug)}`,
+          `/api/metadata?slug=${encodeURIComponent(currentStation!.slug)}`,
           { cache: "no-store" }
         );
         const data = await response.json();
@@ -83,7 +81,7 @@ export default function RadioPortalClient({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeRadio]);
+  }, [currentStation]);
 
   async function report(type: "open" | "play", radio: Station) {
     try {
@@ -99,60 +97,30 @@ export default function RadioPortalClient({
   }
 
   async function playRadio(radio: Station) {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (activeRadio?.slug === radio.slug && playerState === "playing") {
-      audio.pause();
+    if (currentStation?.slug === radio.slug && status === "playing") {
+      pause();
       return;
     }
 
-    if (activeRadio?.slug !== radio.slug) {
-      setActiveRadio(radio);
+    if (currentStation?.slug === radio.slug && status === "paused") {
+      await resume();
+      void report("play", radio);
+      return;
+    }
+
+    if (currentStation?.slug !== radio.slug) {
       setMetadata("Buscando información de la canción…");
-      setPlayerState("loading");
-      audio.src = radio.streamUrl;
-      audio.load();
       void report("open", radio);
     }
 
-    try {
-      setPlayerState("loading");
-      audio.volume = volume;
-      await audio.play();
-      void report("play", radio);
-    } catch {
-      setPlayerState("error");
-    }
+    await playStation(radio);
+    void report("play", radio);
   }
 
-  function playAdjacent(direction: -1 | 1) {
-    if (!activeRadio || radios.length < 2) return;
-    const currentIndex = radios.findIndex(
-      (radio) => radio.slug === activeRadio.slug
-    );
-    const nextIndex =
-      (currentIndex + direction + radios.length) % radios.length;
-    void playRadio(radios[nextIndex]);
-  }
-
-  const isPlaying = playerState === "playing";
+  const isPlaying = status === "playing";
 
   return (
     <main className="min-h-screen bg-[#050506] pb-36 text-white">
-      <audio
-        ref={audioRef}
-        preload="none"
-        onPlaying={() => setPlayerState("playing")}
-        onPause={() =>
-          setPlayerState((current) =>
-            current === "error" ? current : "paused"
-          )
-        }
-        onWaiting={() => setPlayerState("loading")}
-        onError={() => setPlayerState("error")}
-      />
-
       <header className="sticky top-0 z-40 border-b border-white/10 bg-[#050506]/90 backdrop-blur-2xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-4 py-3 sm:gap-5 sm:px-5 sm:py-4 md:px-8">
           <a href="#inicio" className="group" aria-label="Radios 24, inicio">
@@ -295,7 +263,7 @@ export default function RadioPortalClient({
                 type="button"
                 onClick={() => void playRadio(radio)}
                 className={`station-tile group relative aspect-square overflow-hidden rounded-[1.75rem] border p-5 text-left ${
-                  activeRadio?.slug === radio.slug
+                  currentStation?.slug === radio.slug
                     ? "border-cyan-400/80"
                     : "border-white/10"
                 } ${index % 2 ? "translate-y-4 sm:translate-y-7" : ""}`}
@@ -310,7 +278,7 @@ export default function RadioPortalClient({
                   className="relative h-full w-full object-contain drop-shadow-2xl transition duration-500 group-hover:scale-105"
                 />
                 <span className="absolute bottom-4 right-4 flex h-11 w-11 items-center justify-center rounded-full bg-white text-black shadow-xl transition group-hover:scale-110">
-                  {activeRadio?.slug === radio.slug && isPlaying ? "Ⅱ" : "▶"}
+                  {currentStation?.slug === radio.slug && isPlaying ? "Ⅱ" : "▶"}
                 </span>
               </button>
             ))}
@@ -384,7 +352,7 @@ export default function RadioPortalClient({
         {filtered.length ? (
           <div className="mt-5 grid gap-3 md:grid-cols-2">
             {filtered.map((radio) => {
-              const selected = activeRadio?.slug === radio.slug;
+              const selected = currentStation?.slug === radio.slug;
 
               return (
                 <article
@@ -495,96 +463,6 @@ export default function RadioPortalClient({
         </div>
       </footer>
 
-      {activeRadio && (
-        <section
-          className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#09090b]/95 shadow-[0_-20px_60px_rgba(0,0,0,.55)] backdrop-blur-2xl"
-          aria-label="Reproductor"
-        >
-          <div className="mx-auto flex max-w-7xl items-center gap-3 px-3 py-3 md:gap-6 md:px-8">
-            <img
-              src={activeRadio.logo}
-              alt=""
-              width="58"
-              height="58"
-              className="h-14 w-14 shrink-0 rounded-xl bg-black object-contain p-1.5"
-            />
-
-            <div className="min-w-0 flex-1 md:max-w-sm">
-              <p className="truncate font-bold">{activeRadio.name}</p>
-              <p
-                className={`truncate text-xs ${
-                  playerState === "error"
-                    ? "text-red-400"
-                    : playerState === "loading"
-                      ? "text-amber-300"
-                      : "text-cyan-300"
-                }`}
-              >
-                {playerState === "error"
-                  ? "No se pudo conectar. Intentá nuevamente."
-                  : playerState === "loading"
-                    ? "Conectando con la señal…"
-                    : metadata}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-1 md:gap-3">
-              <button
-                type="button"
-                onClick={() => playAdjacent(-1)}
-                className="hidden h-10 w-10 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/10 hover:text-white sm:flex"
-                aria-label="Emisora anterior"
-              >
-                ◀
-              </button>
-              <button
-                type="button"
-                onClick={() => void playRadio(activeRadio)}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-lg font-black text-black transition hover:scale-105"
-                aria-label={isPlaying ? "Pausar" : "Reproducir"}
-              >
-                {playerState === "loading" ? "…" : isPlaying ? "Ⅱ" : "▶"}
-              </button>
-              <button
-                type="button"
-                onClick={() => playAdjacent(1)}
-                className="hidden h-10 w-10 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/10 hover:text-white sm:flex"
-                aria-label="Siguiente emisora"
-              >
-                ▶
-              </button>
-            </div>
-
-            <label className="hidden items-center gap-3 lg:flex">
-              <span className="text-zinc-500" aria-hidden="true">
-                ◖))
-              </span>
-              <span className="sr-only">Volumen</span>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={Math.round(volume * 100)}
-                onChange={(event) => {
-                  const nextVolume = Number(event.target.value) / 100;
-                  setVolume(nextVolume);
-                  if (audioRef.current) audioRef.current.volume = nextVolume;
-                }}
-                className="accent-cyan-400"
-              />
-            </label>
-
-            <a
-              href={`/player/${activeRadio.slug}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hidden rounded-full border border-white/10 px-4 py-2 text-xs font-bold text-zinc-300 transition hover:border-white/30 md:block"
-            >
-              Abrir player
-            </a>
-          </div>
-        </section>
-      )}
     </main>
   );
 }

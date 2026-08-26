@@ -1,21 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { Station } from "@/types/station";
 
-type Radio = {
-  id: number;
-  slug: string;
-  name: string;
-  genre: string;
-  description: string;
-  streamUrl: string;
-  logo: string;
-  originalLogo: string;
-  status: string;
-  color: string;
-};
-
-export default function PlayerClient({ radio }: { radio: Radio }) {
+export default function PlayerClient({ radio }: { radio: Station }) {
 
   const sendAnalyticsEvent = async (type: "open" | "play") => {
     try {

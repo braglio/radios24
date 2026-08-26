@@ -2,21 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-
-type Radio = {
-  id: number;
-  slug: string;
-  name: string;
-  genre: string;
-  description: string;
-  streamUrl: string;
-  logo: string;
-  originalLogo: string;
-  status: string;
-  color: string;
-};
-
-type PlayerState = "idle" | "loading" | "playing" | "paused" | "error";
+import type { PlaybackStatus, Station } from "@/types/station";
 
 const normalize = (value: string) =>
   value
@@ -28,14 +14,14 @@ export default function RadioPortalClient({
   radios,
   featuredSlugs,
 }: {
-  radios: Radio[];
+  radios: Station[];
   featuredSlugs: string[];
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Todas");
-  const [activeRadio, setActiveRadio] = useState<Radio | null>(null);
-  const [playerState, setPlayerState] = useState<PlayerState>("idle");
+  const [activeRadio, setActiveRadio] = useState<Station | null>(null);
+  const [playerState, setPlayerState] = useState<PlaybackStatus>("idle");
   const [volume, setVolume] = useState(0.85);
   const [metadata, setMetadata] = useState("Transmitiendo en vivo");
 
@@ -64,7 +50,7 @@ export default function RadioPortalClient({
     () =>
       featuredSlugs
         .map((slug) => radios.find((radio) => radio.slug === slug))
-        .filter((radio): radio is Radio => Boolean(radio))
+        .filter((radio): radio is Station => Boolean(radio))
         .slice(0, 4),
     [featuredSlugs, radios]
   );
@@ -99,7 +85,7 @@ export default function RadioPortalClient({
     };
   }, [activeRadio]);
 
-  async function report(type: "open" | "play", radio: Radio) {
+  async function report(type: "open" | "play", radio: Station) {
     try {
       await fetch("/api/analytics/play", {
         method: "POST",
@@ -112,7 +98,7 @@ export default function RadioPortalClient({
     }
   }
 
-  async function playRadio(radio: Radio) {
+  async function playRadio(radio: Station) {
     const audio = audioRef.current;
     if (!audio) return;
 

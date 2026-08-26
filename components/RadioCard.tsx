@@ -1,19 +1,10 @@
-type Radio = {
-  id: number;
-  slug: string;
-  name: string;
-  genre: string;
-  description: string;
-  streamUrl: string;
-  status: string;
-  color: string;
-};
+import type { Station } from "@/types/station";
 
 export default function RadioCard({
   radio,
   index,
 }: {
-  radio: Radio;
+  radio: Station;
   index: number;
 }) {
   const initials = radio.name

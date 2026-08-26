@@ -1,0 +1,67 @@
+# Dependencies
+/node_modules/
+
+# Next.js build output
+/.next/
+/out/
+
+# TypeScript generated files
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs and runtime process files
+*.log
+*.pid
+*.seed
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Mutable runtime data
+/data/analytics.json
+/public/uploads/
+/uploads/
+/public/logos/radio-[0-9]*-*.png
+/public/logos/radio-[0-9]*-*.jpg
+/public/logos/radio-[0-9]*-*.webp
+
+# Test and coverage output
+/coverage/
+/playwright-report/
+/test-results/
+
+# Tooling caches and local workspace state
+/.cache/
+/.turbo/
+/cache/
+/.agents/
+/.codex/
+.eslintcache
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp

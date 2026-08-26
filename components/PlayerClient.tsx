@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAudio } from "@/components/audio/useAudio";
 import type { Station } from "@/types/station";
@@ -104,12 +105,12 @@ export default function PlayerClient({ radio }: { radio: Station }) {
 
       <section className="relative z-10 mx-auto w-full max-w-6xl px-5 py-8 md:py-12">
         <nav className="mb-6 flex items-center justify-between gap-4">
-          <a
+          <Link
             href="/"
             className="rounded-full border border-white/10 px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-cyan-400/50 hover:text-white"
           >
             ← Todas las emisoras
-          </a>
+          </Link>
           <p className="text-sm font-black tracking-[0.16em]">
             RADIOS<span className="text-cyan-400">24</span>
           </p>
@@ -226,12 +227,12 @@ export default function PlayerClient({ radio }: { radio: Station }) {
               >
                 Abrir en SYNKAST
               </a>
-              <a
+              <Link
                 href="/"
                 className="rounded-2xl border border-white/10 px-5 py-4 text-center font-bold transition hover:border-white/30"
               >
                 Explorar más radios
-              </a>
+              </Link>
             </div>
           </aside>
         </div>

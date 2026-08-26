@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import AudioProvider from "@/components/audio/AudioProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -46,7 +47,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es-PY">
-      <body>{children}</body>
+      <body>
+        <AudioProvider>{children}</AudioProvider>
+      </body>
     </html>
   );
 }

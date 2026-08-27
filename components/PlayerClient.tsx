@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { useAudio } from "@/components/audio/useAudio";
 import type { Station } from "@/types/station";
 
@@ -14,6 +15,7 @@ export default function PlayerClient({ radio }: { radio: Station }) {
     playStation,
     pause,
     resume,
+    stop,
     setVolume,
   } = useAudio();
 
@@ -33,6 +35,7 @@ export default function PlayerClient({ radio }: { radio: Station }) {
   };
 
   const [metadata, setMetadata] = useState("Cargando metadata...");
+  const [isSynkastActive, setIsSynkastActive] = useState(false);
 
   useEffect(() => {
     sendAnalyticsEvent("open");
@@ -64,6 +67,16 @@ export default function PlayerClient({ radio }: { radio: Station }) {
     return () => clearInterval(timer);
   }, [radio.streamUrl]);
 
+  useEffect(() => {
+    setIsSynkastActive(false);
+  }, [radio.slug]);
+
+  useEffect(() => {
+    if (status === "loading" || status === "playing") {
+      setIsSynkastActive(false);
+    }
+  }, [status]);
+
   const isCurrentStation = currentStation?.slug === radio.slug;
   const isPlaying = isCurrentStation && status === "playing";
   const isLoading = isCurrentStation && status === "loading";
@@ -81,6 +94,16 @@ export default function PlayerClient({ radio }: { radio: Station }) {
             ? error?.message || "No se pudo conectar al stream"
             : "Listo para reproducir";
 
+  const deactivateSynkast = () => {
+    if (!isSynkastActive) return;
+    flushSync(() => setIsSynkastActive(false));
+  };
+
+  const activateSynkast = () => {
+    stop();
+    setIsSynkastActive(true);
+  };
+
   const toggle = async () => {
     if (isPlaying) {
       pause();
@@ -88,11 +111,13 @@ export default function PlayerClient({ radio }: { radio: Station }) {
     }
 
     if (isCurrentStation && status === "paused") {
+      deactivateSynkast();
       await resume();
       void sendAnalyticsEvent("play");
       return;
     }
 
+    deactivateSynkast();
     await playStation(radio);
     void sendAnalyticsEvent("play");
   };
@@ -202,15 +227,27 @@ export default function PlayerClient({ radio }: { radio: Station }) {
             </p>
 
             <div className="mt-8 overflow-hidden rounded-3xl border border-white/10 bg-[#050709]">
-              <iframe
-                src={`https://synkast.com/embed/audio/${encodeURIComponent(radio.slug)}`}
-                width="100%"
-                height="150"
-                className="block border-0"
-                allow="autoplay"
-                loading="lazy"
-                title={`Reproductor SYNKAST de ${radio.name}`}
-              />
+              {isSynkastActive ? (
+                <iframe
+                  src={`https://synkast.com/embed/audio/${encodeURIComponent(radio.slug)}`}
+                  width="100%"
+                  height="150"
+                  className="block border-0"
+                  allow="autoplay"
+                  loading="lazy"
+                  title={`Reproductor SYNKAST de ${radio.name}`}
+                />
+              ) : (
+                <div className="flex min-h-[150px] items-center justify-center p-5">
+                  <button
+                    type="button"
+                    onClick={activateSynkast}
+                    className="rounded-2xl bg-emerald-300 px-6 py-4 font-black text-black transition hover:bg-emerald-200 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-300"
+                  >
+                    Escuchar con SYNKAST
+                  </button>
+                </div>
+              )}
             </div>
 
             <p className="mt-4 text-sm text-zinc-500">

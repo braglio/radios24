@@ -8,7 +8,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { AudioError, AudioState, Station } from "@/types/station";
+import type {
+  AudioError,
+  AudioState,
+  Station,
+  StreamSource,
+} from "@/types/station";
 import PlayerBar from "@/components/PlayerBar";
 import { AudioContext, type AudioContextValue } from "./useAudio";
 
@@ -22,6 +27,16 @@ const initialState: AudioState = {
 };
 
 function playbackError(error: unknown): AudioError {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    "message" in error &&
+    "recoverable" in error
+  ) {
+    return error as AudioError;
+  }
+
   if (error instanceof DOMException && error.name === "NotAllowedError") {
     return {
       code: "autoplay-blocked",
@@ -42,12 +57,20 @@ type AudioSession = {
   audio: HTMLAudioElement;
   events: AbortController;
   intent: "playing" | "paused" | "stopped";
+  station: Station;
+  source: StreamSource;
+  failureHandled: boolean;
+};
+
+type PausedPlayback = {
+  station: Station;
+  source: StreamSource;
 };
 
 export default function AudioProvider({ children }: { children: ReactNode }) {
   const sessionIdRef = useRef(0);
   const activeSessionRef = useRef<AudioSession | null>(null);
-  const pausedSourceRef = useRef<string | null>(null);
+  const pausedPlaybackRef = useRef<PausedPlayback | null>(null);
   const volumeRef = useRef(initialState.volume);
   const [state, setState] = useState<AudioState>(initialState);
 
@@ -66,7 +89,12 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const createSession = useCallback(
-    (source: string) => {
+    (
+      station: Station,
+      source: StreamSource,
+      streamUrl: string,
+      onFailure: (session: AudioSession, error: unknown) => void
+    ) => {
       disposeSession(activeSessionRef.current);
 
       const session: AudioSession = {
@@ -74,6 +102,9 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
         audio: new Audio(),
         events: new AbortController(),
         intent: "playing",
+        station,
+        source,
+        failureHandled: false,
       };
       const { audio, events } = session;
       const isCurrent = () =>
@@ -115,20 +146,16 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
         "error",
         () => {
           if (!isCurrent() || session.intent !== "playing") return;
-          setState((current) => ({
-            ...current,
-            status: "error",
-            error: {
-              code: "media",
-              message: "El stream informó un error de reproducción.",
-              recoverable: true,
-            },
-          }));
+          onFailure(session, {
+            code: "media",
+            message: "El stream informó un error de reproducción.",
+            recoverable: true,
+          } satisfies AudioError);
         },
         { signal: events.signal }
       );
 
-      audio.src = source;
+      audio.src = streamUrl;
       activeSessionRef.current = session;
       audio.load();
       return session;
@@ -136,40 +163,92 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
     [disposeSession]
   );
 
-  const playStation = useCallback(async (station: Station) => {
-    pausedSourceRef.current = null;
-    const session = createSession(station.streamUrl);
+  const startPlayback = useCallback(
+    async (station: Station, initialSource: StreamSource) => {
+      const fallbackUrl = station.fallbackStreamUrl?.trim();
+      const hasFallback =
+        Boolean(fallbackUrl) && fallbackUrl !== station.streamUrl;
 
-    setState((current) => ({
-      ...current,
-      status: "loading",
-      currentStation: station,
-      source: "primary",
-      error: null,
-      retryCount: 0,
-    }));
+      const isActive = (session: AudioSession) =>
+        activeSessionRef.current?.id === session.id &&
+        activeSessionRef.current.audio === session.audio &&
+        session.intent === "playing";
 
-    try {
-      await session.audio.play();
-    } catch (error) {
-      if (activeSessionRef.current?.id !== session.id) return;
-      if (activeSessionRef.current.audio !== session.audio) return;
-      if (session.intent !== "playing") return;
+      const streamUrlFor = (source: StreamSource) =>
+        source === "fallback" ? fallbackUrl! : station.streamUrl;
 
-      setState((current) => ({
-        ...current,
-        status: "error",
-        error: playbackError(error),
-      }));
-    }
-  }, [createSession]);
+      async function handleFailure(session: AudioSession, error: unknown) {
+        if (!isActive(session) || session.failureHandled) return;
+
+        session.failureHandled = true;
+        if (session.source === "primary" && hasFallback) {
+          await startAttempt("fallback");
+          return;
+        }
+
+        const nextError = playbackError(error);
+        setState((current) => ({
+          ...current,
+          status: "error",
+          error:
+            session.source === "fallback"
+              ? {
+                  code: "retries-exhausted",
+                  message: "No se pudo reproducir el stream alternativo.",
+                  recoverable: true,
+                }
+              : nextError,
+        }));
+      }
+
+      async function startAttempt(source: StreamSource) {
+        const session = createSession(
+          station,
+          source,
+          streamUrlFor(source),
+          (failedSession, error) => {
+            void handleFailure(failedSession, error);
+          }
+        );
+
+        pausedPlaybackRef.current = null;
+        setState((current) => ({
+          ...current,
+          status: "loading",
+          currentStation: station,
+          source,
+          error: null,
+          retryCount: source === "fallback" ? 1 : 0,
+        }));
+
+        try {
+          await session.audio.play();
+        } catch (error) {
+          await handleFailure(session, error);
+        }
+      }
+
+      await startAttempt(initialSource);
+    },
+    [createSession]
+  );
+
+  const playStation = useCallback(
+    async (station: Station) => {
+      await startPlayback(station, "primary");
+    },
+    [startPlayback]
+  );
 
   const pause = useCallback(() => {
     const session = activeSessionRef.current;
     if (!session) return;
 
     session.intent = "paused";
-    pausedSourceRef.current = session.audio.src;
+    pausedPlaybackRef.current = {
+      station: session.station,
+      source: session.source,
+    };
     session.audio.pause();
     setState((current) =>
       current.currentStation ? { ...current, status: "paused" } : current
@@ -177,30 +256,14 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resume = useCallback(async () => {
-    const source = pausedSourceRef.current;
-    if (!source) return;
+    const pausedPlayback = pausedPlaybackRef.current;
+    if (!pausedPlayback) return;
 
-    const session = createSession(source);
-    pausedSourceRef.current = null;
-    setState((current) => ({ ...current, status: "loading", error: null }));
-
-    try {
-      await session.audio.play();
-    } catch (error) {
-      if (activeSessionRef.current?.id !== session.id) return;
-      if (activeSessionRef.current.audio !== session.audio) return;
-      if (session.intent !== "playing") return;
-
-      setState((current) => ({
-        ...current,
-        status: "error",
-        error: playbackError(error),
-      }));
-    }
-  }, [createSession]);
+    await startPlayback(pausedPlayback.station, pausedPlayback.source);
+  }, [startPlayback]);
 
   const stop = useCallback(() => {
-    pausedSourceRef.current = null;
+    pausedPlaybackRef.current = null;
     disposeSession(activeSessionRef.current);
     setState((current) => ({
       ...initialState,
@@ -219,7 +282,7 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
 
   useEffect(
     () => () => {
-      pausedSourceRef.current = null;
+      pausedPlaybackRef.current = null;
       disposeSession(activeSessionRef.current);
     },
     [disposeSession]

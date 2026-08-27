@@ -26,6 +26,8 @@ const initialState: AudioState = {
   retryCount: 0,
 };
 
+const reconnectDelays = [2000, 5000, 10000] as const;
+
 function playbackError(error: unknown): AudioError {
   if (
     typeof error === "object" &&
@@ -59,6 +61,7 @@ type AudioSession = {
   intent: "playing" | "paused" | "stopped";
   station: Station;
   source: StreamSource;
+  retryCount: number;
   failureHandled: boolean;
 };
 
@@ -71,8 +74,23 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
   const sessionIdRef = useRef(0);
   const activeSessionRef = useRef<AudioSession | null>(null);
   const pausedPlaybackRef = useRef<PausedPlayback | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playbackOperationIdRef = useRef(0);
   const volumeRef = useRef(initialState.volume);
   const [state, setState] = useState<AudioState>(initialState);
+
+  const cancelReconnect = useCallback(() => {
+    if (reconnectTimerRef.current === null) return;
+
+    clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+  }, []);
+
+  const beginManualOperation = useCallback(() => {
+    cancelReconnect();
+    playbackOperationIdRef.current += 1;
+    return playbackOperationIdRef.current;
+  }, [cancelReconnect]);
 
   const disposeSession = useCallback((session: AudioSession | null) => {
     if (!session) return;
@@ -93,6 +111,8 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
       station: Station,
       source: StreamSource,
       streamUrl: string,
+      retryCount: number,
+      onPlaying: (session: AudioSession) => void,
       onFailure: (session: AudioSession, error: unknown) => void
     ) => {
       disposeSession(activeSessionRef.current);
@@ -104,6 +124,7 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
         intent: "playing",
         station,
         source,
+        retryCount,
         failureHandled: false,
       };
       const { audio, events } = session;
@@ -118,7 +139,7 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
         "playing",
         () => {
           if (!isCurrent() || session.intent !== "playing") return;
-          setState((current) => ({ ...current, status: "playing", error: null }));
+          onPlaying(session);
         },
         { signal: events.signal }
       );
@@ -164,12 +185,18 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
   );
 
   const startPlayback = useCallback(
-    async (station: Station, initialSource: StreamSource) => {
+    async (
+      station: Station,
+      initialSource: StreamSource,
+      operationId: number,
+      initialRetryCount = 0
+    ) => {
       const fallbackUrl = station.fallbackStreamUrl?.trim();
       const hasFallback =
         Boolean(fallbackUrl) && fallbackUrl !== station.streamUrl;
 
       const isActive = (session: AudioSession) =>
+        playbackOperationIdRef.current === operationId &&
         activeSessionRef.current?.id === session.id &&
         activeSessionRef.current.audio === session.audio &&
         session.intent === "playing";
@@ -177,35 +204,100 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
       const streamUrlFor = (source: StreamSource) =>
         source === "fallback" ? fallbackUrl! : station.streamUrl;
 
-      async function handleFailure(session: AudioSession, error: unknown) {
-        if (!isActive(session) || session.failureHandled) return;
+      function handlePlaying(session: AudioSession) {
+        if (!isActive(session)) return;
 
-        session.failureHandled = true;
-        if (session.source === "primary" && hasFallback) {
-          await startAttempt("fallback");
-          return;
-        }
-
-        const nextError = playbackError(error);
+        cancelReconnect();
+        session.retryCount = 0;
         setState((current) => ({
           ...current,
-          status: "error",
-          error:
-            session.source === "fallback"
-              ? {
-                  code: "retries-exhausted",
-                  message: "No se pudo reproducir el stream alternativo.",
-                  recoverable: true,
-                }
-              : nextError,
+          status: "playing",
+          error: null,
+          retryCount: 0,
         }));
       }
 
-      async function startAttempt(source: StreamSource) {
+      function scheduleReconnect(
+        session: AudioSession,
+        retryCount: number,
+        error: AudioError
+      ) {
+        if (!isActive(session)) return;
+
+        cancelReconnect();
+        if (retryCount >= reconnectDelays.length) {
+          setState((current) => ({
+            ...current,
+            status: "error",
+            error: {
+              code: "retries-exhausted",
+              message: "No se pudo restablecer la reproducción.",
+              recoverable: true,
+            },
+            retryCount,
+          }));
+          return;
+        }
+
+        const nextRetryCount = retryCount + 1;
+        const timer = setTimeout(() => {
+          if (
+            reconnectTimerRef.current !== timer ||
+            playbackOperationIdRef.current !== operationId
+          ) {
+            return;
+          }
+
+          reconnectTimerRef.current = null;
+          void startCycle("primary", nextRetryCount);
+        }, reconnectDelays[retryCount]);
+
+        reconnectTimerRef.current = timer;
+        setState((current) => ({
+          ...current,
+          status: "error",
+          error,
+          retryCount: nextRetryCount,
+        }));
+      }
+
+      async function handleFailure(
+        session: AudioSession,
+        error: unknown
+      ) {
+        if (!isActive(session) || session.failureHandled) return;
+
+        session.failureHandled = true;
+        const classifiedError = playbackError(error);
+        if (classifiedError.code === "autoplay-blocked") {
+          cancelReconnect();
+          setState((current) => ({
+            ...current,
+            status: "error",
+            error: classifiedError,
+            retryCount: 0,
+          }));
+          return;
+        }
+
+        if (session.source === "primary" && hasFallback) {
+          await startAttempt("fallback", session.retryCount);
+          return;
+        }
+
+        scheduleReconnect(session, session.retryCount, classifiedError);
+      }
+
+      async function startAttempt(
+        source: StreamSource,
+        retryCount: number
+      ) {
         const session = createSession(
           station,
           source,
           streamUrlFor(source),
+          retryCount,
+          handlePlaying,
           (failedSession, error) => {
             void handleFailure(failedSession, error);
           }
@@ -218,7 +310,7 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
           currentStation: station,
           source,
           error: null,
-          retryCount: source === "fallback" ? 1 : 0,
+          retryCount,
         }));
 
         try {
@@ -228,19 +320,26 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      await startAttempt(initialSource);
+      async function startCycle(source: StreamSource, retryCount: number) {
+        if (playbackOperationIdRef.current !== operationId) return;
+        await startAttempt(source, retryCount);
+      }
+
+      await startCycle(initialSource, initialRetryCount);
     },
-    [createSession]
+    [cancelReconnect, createSession]
   );
 
   const playStation = useCallback(
     async (station: Station) => {
-      await startPlayback(station, "primary");
+      const operationId = beginManualOperation();
+      await startPlayback(station, "primary", operationId);
     },
-    [startPlayback]
+    [beginManualOperation, startPlayback]
   );
 
   const pause = useCallback(() => {
+    beginManualOperation();
     const session = activeSessionRef.current;
     if (!session) return;
 
@@ -253,23 +352,29 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
     setState((current) =>
       current.currentStation ? { ...current, status: "paused" } : current
     );
-  }, []);
+  }, [beginManualOperation]);
 
   const resume = useCallback(async () => {
     const pausedPlayback = pausedPlaybackRef.current;
     if (!pausedPlayback) return;
 
-    await startPlayback(pausedPlayback.station, pausedPlayback.source);
-  }, [startPlayback]);
+    const operationId = beginManualOperation();
+    await startPlayback(
+      pausedPlayback.station,
+      pausedPlayback.source,
+      operationId
+    );
+  }, [beginManualOperation, startPlayback]);
 
   const stop = useCallback(() => {
+    beginManualOperation();
     pausedPlaybackRef.current = null;
     disposeSession(activeSessionRef.current);
     setState((current) => ({
       ...initialState,
       volume: current.volume,
     }));
-  }, [disposeSession]);
+  }, [beginManualOperation, disposeSession]);
 
   const setVolume = useCallback((volume: number) => {
     const nextVolume = Math.min(1, Math.max(0, volume));
@@ -282,10 +387,12 @@ export default function AudioProvider({ children }: { children: ReactNode }) {
 
   useEffect(
     () => () => {
+      cancelReconnect();
+      playbackOperationIdRef.current += 1;
       pausedPlaybackRef.current = null;
       disposeSession(activeSessionRef.current);
     },
-    [disposeSession]
+    [cancelReconnect, disposeSession]
   );
 
   const value = useMemo<AudioContextValue>(

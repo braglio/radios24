@@ -11,13 +11,7 @@ const normalize = (value: string) =>
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
 
-export default function RadioPortalClient({
-  radios,
-  featuredSlugs,
-}: {
-  radios: Station[];
-  featuredSlugs: string[];
-}) {
+export default function RadioPortalClient({ radios }: { radios: Station[] }) {
   const { currentStation, status, playStation, pause, resume } = useAudio();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Todas");
@@ -43,15 +37,6 @@ export default function RadioPortalClient({
       return matchesQuery && matchesCategory;
     });
   }, [category, query, radios]);
-
-  const featured = useMemo(
-    () =>
-      featuredSlugs
-        .map((slug) => radios.find((radio) => radio.slug === slug))
-        .filter((radio): radio is Station => Boolean(radio))
-        .slice(0, 4),
-    [featuredSlugs, radios]
-  );
 
   useEffect(() => {
     if (!currentStation) return;
@@ -133,9 +118,6 @@ export default function RadioPortalClient({
           </a>
 
           <nav className="hidden items-center gap-7 text-sm text-zinc-400 md:flex">
-            <a className="transition hover:text-white" href="#destacadas">
-              Destacadas
-            </a>
             <a className="transition hover:text-white" href="#emisoras">
               Emisoras
             </a>
@@ -191,7 +173,7 @@ export default function RadioPortalClient({
         <div className="hero-glow hero-glow-cyan" />
         <div className="hero-glow hero-glow-magenta" />
 
-        <div className="relative mx-auto grid max-w-7xl items-center gap-10 px-4 py-12 sm:px-5 sm:py-16 md:px-8 lg:min-h-[650px] lg:grid-cols-[1.12fr_0.88fr] lg:gap-14 lg:py-20">
+        <div className="relative mx-auto max-w-7xl px-4 py-12 sm:px-5 sm:py-16 md:px-8 lg:py-20">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/5 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">
               <span className="live-dot" />
@@ -219,7 +201,7 @@ export default function RadioPortalClient({
               </a>
               <button
                 type="button"
-                onClick={() => featured[0] && void playRadio(featured[0])}
+                onClick={() => radios[0] && void playRadio(radios[0])}
                 className="rounded-full border border-white/15 bg-white/5 px-7 py-3.5 font-bold transition hover:border-white/35 hover:bg-white/10"
               >
                 ▶ Reproducir una señal
@@ -256,33 +238,6 @@ export default function RadioPortalClient({
             </dl>
           </div>
 
-          <div id="destacadas" className="mx-auto grid w-full max-w-xl grid-cols-2 gap-3 pb-7 sm:pb-8 md:gap-4 lg:max-w-none">
-            {featured.map((radio, index) => (
-              <button
-                key={radio.slug}
-                type="button"
-                onClick={() => void playRadio(radio)}
-                className={`station-tile group relative aspect-square overflow-hidden rounded-[1.75rem] border p-5 text-left ${
-                  currentStation?.slug === radio.slug
-                    ? "border-cyan-400/80"
-                    : "border-white/10"
-                } ${index % 2 ? "translate-y-4 sm:translate-y-7" : ""}`}
-                aria-label={`Escuchar ${radio.name}`}
-              >
-                <span className="absolute inset-0 bg-gradient-to-br from-white/[0.08] to-transparent" />
-                <img
-                  src={radio.logo}
-                  alt=""
-                  width="240"
-                  height="240"
-                  className="relative h-full w-full object-contain drop-shadow-2xl transition duration-500 group-hover:scale-105"
-                />
-                <span className="absolute bottom-4 right-4 flex h-11 w-11 items-center justify-center rounded-full bg-white text-black shadow-xl transition group-hover:scale-110">
-                  {currentStation?.slug === radio.slug && isPlaying ? "Ⅱ" : "▶"}
-                </span>
-              </button>
-            ))}
-          </div>
         </div>
       </section>
 
